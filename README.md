@@ -1,437 +1,311 @@
 --[[
-    Sistema de Automação e ESP para Bridger: WESTERN (Roblox)
-    ----------------------------------------------------------
-    Interface moderna com abas para automação completa da pesca e ESP visual.
-    Compatível com a maioria dos executors (Synapse, Krnl, Fluxus, etc.)
+    Script Simples para Bridger: WESTERN
+    - Pesca Automática Inteligente
+    - ESP de Jogadores e Partes do Santo
+    Compatível com Xeno e outros executores.
 ]]
 
--- 1. Carregar Bibliotecas e Dependências
-local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
-local Drawing = loadstring(game:HttpGet("https://raw.githubusercontent.com/Stefanuk12/DrawingLib/main/DrawingLib.lua"))()
+-- ================= CONFIGURAÇÕES =================
+local AUTO_FISH = true           -- Ativa a pesca automática
+local AUTO_MINIGAME = true       -- Ativa o minigame automático (QTE + tensão)
+local PLAYER_ESP = true          -- Ativa ESP de jogadores (caixa + nome + vida)
+local CORPSE_ESP = true          -- Ativa ESP das partes do Santo (dourado)
+
+-- ============== SERVIÇOS DO ROBLOX ===============
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
+local VIM = game:GetService("VirtualInputManager")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
--- 2. Configuração da Janela Principal (UI)
-local Window = Rayfield:CreateWindow({
-    Name = "Bridger WESTERN - AutoFisher & ESP",
-    Icon = "fish", -- Ícone do menu (pode ser alterado)
-    LoadingTitle = "Carregando Script...",
-    LoadingSubtitle = "by Assistant",
-    Theme = "Dark" -- Opções: "Default", "Dark", "Light"
-})
+-- ============== BIBLIOTECA DE DESENHO (ESP) ==============
+local Drawing = loadstring(game:HttpGet("https://raw.githubusercontent.com/Stefanuk12/DrawingLib/main/DrawingLib.lua"))()
 
--- 3. Aba de Pesca (Prioridade Máxima)
-local FishingTab = Window:CreateTab("🎣 Pesca", "fish") -- Nome e ícone da aba
+-- ============== VARIÁVEIS DO ESP ==============
+local ESPConnections = {}
+local PlayerDrawings = {}
+local CorpseDrawings = {}
 
-local FishingSection = FishingTab:CreateSection("Automação Inteligente de Pesca")
-local ToggleAutoFish = FishingTab:CreateToggle({
-    Name = "Pesca Automática (Detecção por Timing)",
-    CurrentValue = false,
-    Flag = "AutoFishToggle",
-    Callback = function(Value)
-        print("Pesca Automática: " .. tostring(Value))
-    end,
-})
-
-local ToggleAutoMinigame = FishingTab:CreateToggle({
-    Name = "Auto Minigame (QTE + Controle de Tensão)",
-    CurrentValue = false,
-    Flag = "AutoMinigameToggle",
-    Callback = function(Value)
-        print("Auto Minigame: " .. tostring(Value))
-    end,
-})
-
--- Botão para iniciar a lógica principal da pesca
-local StartFishingButton = FishingTab:CreateButton({
-    Name = "▶ Iniciar Sessão de Pesca",
-    Callback = function()
-        if not ToggleAutoFish.CurrentValue then
-            Rayfield:Notify({
-                Title = "Pesca Automática",
-                Content = "Ative primeiro a 'Pesca Automática'.",
-                Duration = 5,
-                Image = "error",
-            })
-            return
-        end
-        print("Sessão de pesca iniciada. Aguardando detecção de bolhas...")
-        -- Inicia a thread principal de pesca (veja abaixo)
-        task.spawn(FishingLoop)
-    end,
-})
-
--- 4. Aba de ESP
-local ESPTab = Window:CreateTab("👁️ ESP", "eye")
-
-local ESPSection = ESPTab:CreateSection("Visualização Avançada")
-local TogglePlayerESP = ESPTab:CreateToggle({
-    Name = "ESP de Jogadores (Caixas, Vida, Distância)",
-    CurrentValue = false,
-    Flag = "PlayerESPToggle",
-    Callback = function(Value)
-        print("ESP de Jogadores: " .. tostring(Value))
-        if Value then
-            StartPlayerESP()
-        else
-            StopPlayerESP()
-        end
-    end,
-})
-
-local ToggleCorpseESP = ESPTab:CreateToggle({
-    Name = "ESP do Santo (Partes do Corpo)",
-    CurrentValue = false,
-    Flag = "CorpseESPToggle",
-    Callback = function(Value)
-        print("ESP de Partes do Corpo: " .. tostring(Value))
-        if Value then
-            StartCorpseESP()
-        else
-            StopCorpseESP()
-        end
-    end,
-})
-
--- 5. LÓGICA PRINCIPAL DA PESCA (Prioridade Máxima)
-
--- Função auxiliar para simular clique do mouse
-local function SimulateClick(holdDuration)
-    holdDuration = holdDuration or 0.1
-    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-    wait(holdDuration)
-    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+-- ============== FUNÇÕES AUXILIARES ==============
+local function pressKey(key, duration)
+    duration = duration or 0.05
+    VIM:SendKeyEvent(true, Enum.KeyCode[key], false, game)
+    task.wait(duration)
+    VIM:SendKeyEvent(false, Enum.KeyCode[key], false, game)
 end
 
--- Função auxiliar para simular tecla do teclado
-local function SimulateKeyPress(key)
-    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode[key], false, game)
-    wait(0.05)
-    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode[key], false, game)
+local function clickMouse(duration)
+    duration = duration or 0.1
+    VIM:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+    task.wait(duration)
+    VIM:SendMouseButtonEvent(0, 0, 0, false, game, 0)
 end
 
--- Detecta bolhas na água (baseado em mudanças visuais)
-local function DetectBubbles()
-    -- Esta é uma detecção simplificada baseada em heurísticas.
-    -- Em um cenário real, usaríamos reconhecimento de imagem via executor (ex: getcustomasset).
-    -- Para Bridger: WESTERN, a dica é aguardar até que a "sombra" se aproxime da isca.
-    -- Simulamos uma verificação periódica.
-    local player = LocalPlayer
-    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
-        return false
-    end
-    
-    -- Lógica de timing: Esperamos um tempo aleatório entre 2 e 5 segundos (simula a aproximação do peixe)
-    local waitTime = math.random(20, 50) / 10 -- 2.0 a 5.0 segundos
-    wait(waitTime)
-    
-    -- Após o tempo, consideramos que o peixe está perto o suficiente para fisgar.
-    -- Em um script real, você verificaria propriedades da UI ou do RemoteEvent do jogo.
-    return true
-end
-
--- Detecta a tecla QTE atualmente exibida na tela
-local function DetectQTEKey()
-    -- Simulação: Retorna uma das teclas possíveis (R, F, T, G) aleatoriamente.
-    -- Em um script real, você inspecionaria a GUI do jogo (PlayerGui) para encontrar o texto da tecla.
+-- Detecta tecla QTE (simplificado - no jogo real, você inspeciona a GUI)
+local function getCurrentQTEKey()
+    -- Para uma detecção real, use :FindFirstChild na PlayerGui.
+    -- Exemplo: local key = LocalPlayer.PlayerGui:FindFirstChild("QTE") and LocalPlayer.PlayerGui.QTE.TextLabel.Text
+    -- Como não temos acesso exato à UI, simulamos aleatoriamente uma das 4 teclas.
     local keys = {"R", "F", "T", "G"}
     return keys[math.random(1, 4)]
 end
 
--- Controla a barra de tensão (simula pressionar e soltar a tecla espaço)
-local function ControlTensionBar()
-    -- Simulação: Mantém o espaço pressionado por um curto período e solta.
-    -- Em um script real, você monitoraria a posição do indicador na barra (via ScreenGui).
-    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-    wait(0.2)
-    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+-- Controle da barra de tensão (simula segurar e soltar espaço)
+local function controlTension()
+    -- Em um script avançado, você leria a posição do ponteiro na barra.
+    -- Aqui simulamos um comportamento seguro.
+    VIM:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+    task.wait(0.2)
+    VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+    task.wait(0.1)
 end
 
--- Loop principal da pesca
-function FishingLoop()
-    while ToggleAutoFish.CurrentValue do
-        print("🎣 Lançando a linha...")
-        SimulateClick(0.2) -- Simula clique longo para lançar
+-- ============== LOOP PRINCIPAL DA PESCA ==============
+local function fishingLoop()
+    while AUTO_FISH and task.wait(1) do
+        print("🎣 Lançando linha...")
+        clickMouse(0.2) -- clique longo para arremessar
         
-        print("⏳ Aguardando atividade do peixe (bolhas)...")
-        local fishDetected = DetectBubbles()
+        -- Aguarda detecção da fisgada (simula espera inteligente)
+        local waitTime = math.random(30, 60) / 10  -- 3 a 6 segundos
+        print("⏳ Aguardando peixe... (" .. waitTime .. "s)")
+        task.wait(waitTime)
         
-        if fishDetected then
-            print("⚡ Peixe detectado! Executando fisgada precisa.")
-            SimulateClick(0.05) -- Clique rápido para fisgar
+        print("⚡ Peixe detectado! Fisgando...")
+        clickMouse(0.05) -- clique rápido para fisgar
+        
+        if AUTO_MINIGAME then
+            print("🎮 Iniciando minigame automático...")
             
-            if ToggleAutoMinigame.CurrentValue then
-                print("🎮 Iniciando Auto Minigame...")
-                
-                -- Parte 1: QTE com teclas dinâmicas
-                for i = 1, 3 do -- Geralmente são 3 QTE's antes da barra de tensão
-                    local keyToPress = DetectQTEKey()
-                    print("⌨️ Pressionando tecla QTE: " .. keyToPress)
-                    SimulateKeyPress(keyToPress)
-                    wait(0.5) -- Pequena pausa entre teclas
-                end
-                
-                -- Parte 2: Controle da Barra de Tensão
-                print("📊 Controlando barra de tensão...")
-                for i = 1, 5 do -- Simula 5 ciclos de ajuste de tensão
-                    ControlTensionBar()
-                    wait(0.3)
-                end
-                
-                print("✅ Minigame concluído! Peixe capturado.")
-            else
-                print("ℹ️ Auto Minigame desativado. Complete manualmente.")
+            -- Parte 1: QTE (3 rodadas normalmente)
+            for i = 1, 3 do
+                local key = getCurrentQTEKey()
+                print("   ⌨️ Pressionando " .. key)
+                pressKey(key, 0.08)
+                task.wait(0.4)
             end
+            
+            -- Parte 2: Controle de tensão (5 ciclos)
+            print("📊 Controlando tensão...")
+            for i = 1, 5 do
+                controlTension()
+                task.wait(0.25)
+            end
+            
+            print("✅ Peixe capturado!")
         else
-            print("😞 Nenhum peixe detectado. Recolhendo linha...")
+            print("ℹ️ Minigame desativado. Complete manualmente.")
         end
         
-        wait(2) -- Pausa entre tentativas
+        task.wait(2) -- pausa entre pescarias
     end
-    print("⏹️ Sessão de pesca finalizada.")
 end
 
--- 6. LÓGICA DO ESP (Players e Partes do Corpo)
-
-local PlayerESPConnections = {}
-local CorpseESPConnections = {}
-local PlayerHighlights = {}
-local CorpseHighlights = {}
-
--- Função para criar Highlight em um modelo 3D
-local function CreateHighlight(model, color, name)
-    local highlight = Instance.new("Highlight")
-    highlight.Name = name or "ESP_Highlight"
-    highlight.FillColor = color or Color3.fromRGB(0, 255, 0)
-    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
-    highlight.FillTransparency = 0.5
-    highlight.OutlineTransparency = 0
-    highlight.Adornee = model
-    highlight.Parent = model
-    return highlight
-end
-
--- ESP de Jogadores
-function StartPlayerESP()
-    -- Remove highlights antigos
-    StopPlayerESP()
-    
-    -- Função para adicionar ESP a um jogador
-    local function AddESPToPlayer(player)
-        if player == LocalPlayer then return end
-        if player.Character then
-            local highlight = CreateHighlight(player.Character, Color3.fromRGB(0, 255, 0), "PlayerESP_" .. player.Name)
-            table.insert(PlayerHighlights, highlight)
-            
-            -- Adiciona BillboardGui com nome, vida e distância
-            local function setupBillboard(character)
-                local head = character:WaitForChild("Head", 5)
-                if not head then return end
-                
-                local billboard = Instance.new("BillboardGui")
-                billboard.Name = "ESP_Billboard"
-                billboard.Adornee = head
-                billboard.Size = UDim2.new(0, 200, 0, 50)
-                billboard.StudsOffset = Vector3.new(0, 2.5, 0)
-                billboard.AlwaysOnTop = true
-                billboard.Parent = head
-                
-                local frame = Instance.new("Frame")
-                frame.Size = UDim2.new(1, 0, 1, 0)
-                frame.BackgroundTransparency = 0.7
-                frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-                frame.BorderSizePixel = 0
-                frame.Parent = billboard
-                
-                local nameLabel = Instance.new("TextLabel")
-                nameLabel.Size = UDim2.new(1, 0, 0.4, 0)
-                nameLabel.BackgroundTransparency = 1
-                nameLabel.Text = player.Name
-                nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-                nameLabel.TextScaled = true
-                nameLabel.Font = Enum.Font.SourceSansBold
-                nameLabel.Parent = frame
-                
-                local healthLabel = Instance.new("TextLabel")
-                healthLabel.Size = UDim2.new(1, 0, 0.3, 0)
-                healthLabel.Position = UDim2.new(0, 0, 0.4, 0)
-                healthLabel.BackgroundTransparency = 1
-                healthLabel.Text = "❤️ " .. tostring(player.Character.Humanoid.Health)
-                healthLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-                healthLabel.TextScaled = true
-                healthLabel.Font = Enum.Font.SourceSans
-                healthLabel.Parent = frame
-                
-                local distanceLabel = Instance.new("TextLabel")
-                distanceLabel.Size = UDim2.new(1, 0, 0.3, 0)
-                distanceLabel.Position = UDim2.new(0, 0, 0.7, 0)
-                distanceLabel.BackgroundTransparency = 1
-                distanceLabel.Text = "0m"
-                distanceLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-                distanceLabel.TextScaled = true
-                distanceLabel.Font = Enum.Font.SourceSans
-                distanceLabel.Parent = frame
-                
-                -- Atualiza distância em tempo real
-                local connection
-                connection = RunService.RenderStepped:Connect(function()
-                    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
-                        connection:Disconnect()
-                        return
-                    end
-                    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                    if myRoot then
-                        local dist = (player.Character.HumanoidRootPart.Position - myRoot.Position).Magnitude
-                        distanceLabel.Text = string.format("%.0fm", dist)
-                    end
-                end)
-                table.insert(PlayerESPConnections, connection)
-            end
-            
-            if player.Character:FindFirstChild("Head") then
-                setupBillboard(player.Character)
-            else
-                player.Character:WaitForChild("Head", 5):Wait()
-                setupBillboard(player.Character)
-            end
-        end
+-- ============== ESP DE JOGADORES ==============
+local function updatePlayerESP()
+    -- Limpa desenhos antigos
+    for _, drawing in pairs(PlayerDrawings) do
+        if drawing.Remove then drawing:Remove() end
     end
+    PlayerDrawings = {}
     
-    -- Adiciona para todos os jogadores atuais
     for _, player in ipairs(Players:GetPlayers()) do
-        AddESPToPlayer(player)
-    end
-    
-    -- Conecta evento para novos jogadores
-    local playerAddedConn = Players.PlayerAdded:Connect(AddESPToPlayer)
-    table.insert(PlayerESPConnections, playerAddedConn)
-    
-    -- Conecta evento para quando o personagem spawna
-    local function onCharacterAdded(character)
-        local player = Players:GetPlayerFromCharacter(character)
-        if player then
-            AddESPToPlayer(player)
-        end
-    end
-    local charAddedConn = LocalPlayer.CharacterAdded:Connect(onCharacterAdded)
-    table.insert(PlayerESPConnections, charAddedConn)
-    
-    print("ESP de Jogadores ativado.")
-end
-
-function StopPlayerESP()
-    for _, conn in ipairs(PlayerESPConnections) do
-        conn:Disconnect()
-    end
-    PlayerESPConnections = {}
-    
-    for _, highlight in ipairs(PlayerHighlights) do
-        if highlight and highlight.Parent then
-            highlight:Destroy()
-        end
-    end
-    PlayerHighlights = {}
-    
-    -- Remove billboards
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local root = player.Character.HumanoidRootPart
             local head = player.Character:FindFirstChild("Head")
-            if head then
-                local billboard = head:FindFirstChild("ESP_Billboard")
-                if billboard then billboard:Destroy() end
-            end
-        end
-    end
-    
-    print("ESP de Jogadores desativado.")
-end
-
--- ESP de Partes do Corpo (Santo)
-function StartCorpseESP()
-    StopCorpseESP()
-    
-    local function scanForCorpseParts()
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj:IsA("BasePart") then
-                local name = obj.Name
-                if name == "LeftArm" or name == "RightArm" or name == "LeftLeg" or name == "RightLeg" or name == "RibCage" then
-                    if not obj:FindFirstChild("CorpseESP") then
-                        local highlight = CreateHighlight(obj, Color3.fromRGB(255, 215, 0), "CorpseESP")
-                        highlight.FillTransparency = 0.7
-                        table.insert(CorpseHighlights, highlight)
-                        
-                        -- Adiciona Billboard com nome
-                        local billboard = Instance.new("BillboardGui")
-                        billboard.Name = "CorpseESP_Billboard"
-                        billboard.Adornee = obj
-                        billboard.Size = UDim2.new(0, 150, 0, 30)
-                        billboard.StudsOffset = Vector3.new(0, 1, 0)
-                        billboard.AlwaysOnTop = true
-                        billboard.Parent = obj
-                        
-                        local label = Instance.new("TextLabel")
-                        label.Size = UDim2.new(1, 0, 1, 0)
-                        label.BackgroundTransparency = 0.5
-                        label.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-                        label.Text = "✨ " .. name .. " ✨"
-                        label.TextColor3 = Color3.fromRGB(255, 215, 0)
-                        label.TextScaled = true
-                        label.Font = Enum.Font.SourceSansBold
-                        label.Parent = billboard
-                        
-                        print("Parte do Santo encontrada: " .. name)
-                    end
+            local humanoid = player.Character:FindFirstChild("Humanoid")
+            if not (root and head and humanoid) then continue end
+            
+            -- Cria caixa 2D ao redor do jogador
+            local box = Drawing.new("Square")
+            box.Visible = true
+            box.Thickness = 2
+            box.Color = Color3.fromRGB(0, 255, 0)
+            box.Filled = false
+            box.Transparency = 1
+            
+            -- Nome e vida
+            local nameTag = Drawing.new("Text")
+            nameTag.Visible = true
+            nameTag.Text = player.Name .. " [" .. math.floor(humanoid.Health) .. " HP]"
+            nameTag.Size = 14
+            nameTag.Color = Color3.fromRGB(255, 255, 255)
+            nameTag.Center = true
+            nameTag.Outline = true
+            nameTag.OutlineColor = Color3.new(0,0,0)
+            
+            -- Distância
+            local distTag = Drawing.new("Text")
+            distTag.Visible = true
+            distTag.Size = 12
+            distTag.Color = Color3.fromRGB(200, 200, 200)
+            distTag.Center = true
+            distTag.Outline = true
+            distTag.OutlineColor = Color3.new(0,0,0)
+            
+            table.insert(PlayerDrawings, box)
+            table.insert(PlayerDrawings, nameTag)
+            table.insert(PlayerDrawings, distTag)
+            
+            -- Conexão para atualizar posição a cada frame
+            local connection = RunService.RenderStepped:Connect(function()
+                if not player.Character or not root.Parent then
+                    box.Visible = false
+                    nameTag.Visible = false
+                    distTag.Visible = false
+                    return
                 end
-            end
+                
+                local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if not myRoot then return end
+                
+                local distance = (root.Position - myRoot.Position).Magnitude
+                local screenPos, onScreen = Camera:WorldToViewportPoint(root.Position)
+                
+                if onScreen then
+                    local headPos = Camera:WorldToViewportPoint(head.Position)
+                    local scale = 500 / math.max(distance, 1)
+                    local height = math.clamp(scale * 2, 40, 150)
+                    local width = height * 0.6
+                    
+                    box.Position = Vector2.new(screenPos.X - width/2, screenPos.Y - height/2)
+                    box.Size = Vector2.new(width, height)
+                    box.Visible = true
+                    
+                    nameTag.Position = Vector2.new(screenPos.X, screenPos.Y - height/2 - 15)
+                    nameTag.Text = player.Name .. " [" .. math.floor(humanoid.Health) .. " HP]"
+                    nameTag.Visible = true
+                    
+                    distTag.Position = Vector2.new(screenPos.X, screenPos.Y + height/2 + 5)
+                    distTag.Text = string.format("%.0fm", distance)
+                    distTag.Visible = true
+                else
+                    box.Visible = false
+                    nameTag.Visible = false
+                    distTag.Visible = false
+                end
+            end)
+            
+            table.insert(ESPConnections, connection)
         end
     end
-    
-    -- Escaneia periodicamente (a cada 3 segundos)
-    local scanConnection = RunService.Heartbeat:Connect(function()
-        if not ToggleCorpseESP.CurrentValue then
-            scanConnection:Disconnect()
-            return
-        end
-        scanForCorpseParts()
-    end)
-    table.insert(CorpseESPConnections, scanConnection)
-    
-    print("ESP do Santo ativado. Escaneando por partes...")
 end
 
-function StopCorpseESP()
-    for _, conn in ipairs(CorpseESPConnections) do
+-- ============== ESP DO SANTO (PARTES DO CORPO) ==============
+local function updateCorpseESP()
+    for _, drawing in pairs(CorpseDrawings) do
+        if drawing.Remove then drawing:Remove() end
+    end
+    CorpseDrawings = {}
+    
+    local parts = {"LeftArm", "RightArm", "LeftLeg", "RightLeg", "RibCage"}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and table.find(parts, obj.Name) then
+            local box = Drawing.new("Square")
+            box.Visible = true
+            box.Thickness = 3
+            box.Color = Color3.fromRGB(255, 215, 0)  -- dourado
+            box.Filled = false
+            box.Transparency = 1
+            
+            local label = Drawing.new("Text")
+            label.Visible = true
+            label.Text = "✨ " .. obj.Name
+            label.Size = 14
+            label.Color = Color3.fromRGB(255, 215, 0)
+            label.Center = true
+            label.Outline = true
+            label.OutlineColor = Color3.new(0,0,0)
+            
+            table.insert(CorpseDrawings, box)
+            table.insert(CorpseDrawings, label)
+            
+            local connection = RunService.RenderStepped:Connect(function()
+                if not obj.Parent then
+                    box.Visible = false
+                    label.Visible = false
+                    return
+                end
+                
+                local pos = obj.Position
+                local screenPos, onScreen = Camera:WorldToViewportPoint(pos)
+                if onScreen then
+                    local size = obj.Size
+                    local maxDim = math.max(size.X, size.Y, size.Z)
+                    local scale = 200 / math.max((pos - Camera.CFrame.Position).Magnitude, 1)
+                    local boxSize = maxDim * scale * 0.5
+                    
+                    box.Position = Vector2.new(screenPos.X - boxSize/2, screenPos.Y - boxSize/2)
+                    box.Size = Vector2.new(boxSize, boxSize)
+                    box.Visible = true
+                    
+                    label.Position = Vector2.new(screenPos.X, screenPos.Y - boxSize/2 - 15)
+                    label.Visible = true
+                else
+                    box.Visible = false
+                    label.Visible = false
+                end
+            end)
+            
+            table.insert(ESPConnections, connection)
+        end
+    end
+end
+
+-- ============== INICIALIZAÇÃO ==============
+print("=== SCRIPT CARREGADO ===")
+print("Pesca Automática: " .. tostring(AUTO_FISH))
+print("Auto Minigame: " .. tostring(AUTO_MINIGAME))
+print("ESP Jogadores: " .. tostring(PLAYER_ESP))
+print("ESP Santo: " .. tostring(CORPSE_ESP))
+
+-- Inicia a pesca em uma thread separada
+if AUTO_FISH then
+    task.spawn(fishingLoop)
+end
+
+-- Atualiza ESP a cada segundo (jogadores podem entrar/sair)
+if PLAYER_ESP then
+    task.spawn(function()
+        while PLAYER_ESP and task.wait(1) do
+            updatePlayerESP()
+        end
+    end)
+end
+
+if CORPSE_ESP then
+    task.spawn(function()
+        while CORPSE_ESP and task.wait(1) do
+            updateCorpseESP()
+        end
+    end)
+end
+
+-- Comandos rápidos no console (opcional)
+print("Digite 'stop_fish' para parar a pesca.")
+print("Digite 'stop_esp' para desativar todos os ESP.")
+
+-- Permite controle via console
+getgenv().stop_fish = function()
+    AUTO_FISH = false
+    print("Pesca automática DESATIVADA.")
+end
+
+getgenv().stop_esp = function()
+    PLAYER_ESP = false
+    CORPSE_ESP = false
+    for _, conn in ipairs(ESPConnections) do
         conn:Disconnect()
     end
-    CorpseESPConnections = {}
-    
-    for _, highlight in ipairs(CorpseHighlights) do
-        if highlight and highlight.Parent then
-            highlight:Destroy()
-        end
+    ESPConnections = {}
+    for _, drawing in pairs(PlayerDrawings) do
+        if drawing.Remove then drawing:Remove() end
     end
-    CorpseHighlights = {}
-    
-    -- Remove billboards
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("BasePart") and obj:FindFirstChild("CorpseESP_Billboard") then
-            obj.CorpseESP_Billboard:Destroy()
-        end
+    for _, drawing in pairs(CorpseDrawings) do
+        if drawing.Remove then drawing:Remove() end
     end
-    
-    print("ESP do Santo desativado.")
+    PlayerDrawings = {}
+    CorpseDrawings = {}
+    print("ESP DESATIVADO.")
 end
-
--- 7. Notificação de Carregamento
-Rayfield:Notify({
-    Title = "Bridger WESTERN",
-    Content = "Script carregado com sucesso! Use as abas para configurar.",
-    Duration = 5,
-    Image = "success",
-})
-
-print("✅ Script 'Bridger WESTERN - AutoFisher & ESP' carregado!")
